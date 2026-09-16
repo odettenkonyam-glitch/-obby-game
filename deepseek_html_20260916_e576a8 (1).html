@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Obby game · double jump + slow trolls</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+    }
+    body {
+      background: #0f172a;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+    }
+    .game-container {
+      background: #1e293b;
+      padding: 1.5rem 2rem 2rem;
+      border-radius: 3rem 3rem 2rem 2rem;
+      box-shadow: 0 20px 30px rgba(0,0,0,0.6), inset 0 0 0 2px #334155;
+    }
+    canvas {
+      display: block;
+      margin: 0 auto;
+      border-radius: 24px;
+      box-shadow: 0 0 0 4px #0b1120, 0 15px 25px rgba(0,0,0,0.5);
+      cursor: pointer;
+    }
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 1rem 0.5rem 0.2rem;
+      color: #e2e8f0;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    .hud span {
+      background: #0b1120;
+      padding: 0.4rem 1.2rem;
+      border-radius: 40px;
+      border: 1px solid #3b4b5e;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+      font-size: 1rem;
+    }
+    .hud .win-message {
+      color: #facc15;
+      text-shadow: 0 0 10px #eab308;
+      background: #2d2a0e;
+      border-color: #a16207;
+    }
+    .controls {
+      display: flex;
+      justify-content: center;
+      gap: 1.5rem;
+      margin-top: 1rem;
+      color: #94a3b8;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+    .controls kbd {
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 0.2rem 0.7rem;
+      border: 1px solid #475569;
+      color: #f1f5f9;
+      font-weight: 700;
+    }
+    button {
+      background: #3b82f6;
+      border: none;
+      color: white;
+      font-weight: 700;
+      padding: 0.4rem 1.2rem;
+      border-radius: 40px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: all 0.1s;
+      box-shadow: 0 6px 0 #1e3a8a;
+      transform: translateY(0);
+      margin-left: 0.5rem;
+    }
+    button:active {
+      transform: translateY(4px);
+      box-shadow: 0 2px 0 #1e3a8a;
+    }
+    .reset-container {
+      display: flex;
+      align-items: center;
+    }
+    .level-badge {
+      background: #0b1120;
+      padding: 0.4rem 1rem;
+      border-radius: 40px;
+      border: 1px solid #facc15;
+      color: #facc15;
+      font-weight: 700;
+      margin-right: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+<div class="game-container">
+  <canvas id="gameCanvas" width="900" height="500"></canvas>
+  <div class="hud">
+    <span>🏁 OBBY <span id="levelDisplay" class="level-badge">1 / 20</span></span>
+    <div class="reset-container">
+      <span id="message" class="win-message" style="min-width: 150px; text-align: center;">⬆️ jump ⬅️➡️</span>
+      <button id="resetBtn">⟲ RESTART</button>
+    </div>
+  </div>
+  <div class="controls">
+    <span><kbd>←</kbd> <kbd>→</kbd> move</span>
+    <span><kbd>↑</kbd> / <kbd>Space</kbd> jump</span>
+    <span>press twice for <span style="color:#38bdf8;">double jump</span></span>
+  </div>
+</div>
+<script>
+  (function() {
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const messageEl = document.getElementById('message');
+    const levelDisplay = document.getElementById('levelDisplay');
+
+    // ---------- FIXED DIMENSIONS ----------
+    const W = 900;
+    const H = 500;
+    const PLAYER_SIZE = 30;
+    const GRAVITY = 0.6;
+    const JUMP_FORCE = -12;
+    const MOVE_SPEED = 4.5;
+    const DOUBLE_JUMP_FORCE = -11;
+    const FAKE_DELAY_FRAMES = 300;  // 5 seconds at 60 FPS
+
+    // ---------- GAME STATE ----------
+    let currentLevelIndex = 0;
+    let frameCounter = 0;
+    let player = {
+      x: 80, y: 350, vx: 0, vy: 0,
+      width: PLAYER_SIZE, height: PLAYER_SIZE,
+      onGround: false,
+      jumpsLeft: 2,
+      jumpHeld: false,
+    };
+    let goalCooldown = false;
+
+    // ---------- TROLL STATE ----------
+    let fakePlatforms = [];
+    let triggeredFakes = new Set();
+    let movingPlatforms = [];
+    let gravityFlip = false;
+    let ghostGoal = false;
+    let goalOffsetX = 0;
+    let goalOffsetY = 0;
+    let goalOriginal = { x: 0, y: 0 };
+    let invisiblePlatforms = [];
+    let respawnCooldown = 0;
+
+    // ---------- LEVEL DEFINITIONS ----------
+    const levels = [
+      // 1
+      {
+        platforms: [
+          { x: 0, y: 430, w: 180, h: 30 },
+          { x: 210, y: 390, w: 70, h: 20 },
+          { x: 310, y: 340, w: 70, h: 20 },
+          { x: 430, y: 300, w: 70, h: 20 },
+          { x: 540, y: 250, w: 70, h: 20 },
+          { x: 650, y: 200, w: 70, h: 20 },
+          { x: 770, y: 160, w: 60, h: 20 },
+          { x: 830, y: 120, w: 60, h: 20 },
+        ],
+        goal: { x: 830, y: 120, w: 60, h: 20 },
+        spawn: { x: 80, y: 350 },
+      },
+      // 2
+      {
+        platforms: [
+          { x: 0, y: 430, w: 140, h: 30 },
+          { x: 180, y: 380, w: 60, h: 20 },
+          { x: 290, y: 320, w: 55, h: 20 },
+          { x: 400, y: 260, w: 50, h: 20 },
+          { x: 500, y: 200, w: 55, h: 20 },
+          { x: 610, y: 150, w: 50, h: 20 },
+          { x: 720, y: 100, w: 55, h: 20 },
+          { x: 820, y: 70, w: 60, h: 20 },
+        ],
+        goal: { x: 820, y: 70, w: 60, h: 20 },
+        spawn: { x: 60, y: 350 },
+      },
+      // 3
+      {
+        platforms: [
+          { x: 0, y: 430, w: 120, h: 30 },
+          { x: 160, y: 400, w: 60, h: 20 },
+          { x: 260, y: 340, w: 60, h: 20 },
+          { x: 360, y: 400, w: 60, h: 20 },
+          { x: 470, y: 320, w: 60, h: 20 },
+          { x: 580, y: 380, w: 60, h: 20 },
+          { x: 690, y: 280, w: 60, h: 20 },
+          { x: 800, y: 180, w: 70, h: 20 },
+        ],
+        goal: { x: 800, y: 180, w: 70, h: 20 },
+        spawn: { x: 50, y: 350 },
+      },
+      // 4
+      {
+        platforms: [
+          { x: 0, y: 430, w: 100, h: 30 },
+          { x: 140, y: 390, w: 45, h: 18 },
+          { x: 230, y: 330, w: 45, h: 18 },
+          { x: 320, y: 270, w: 45, h: 18 },
+          { x: 410, y: 210, w: 45, h: 18 },
+          { x: 500, y: 150, w: 45, h: 18 },
+          { x: 590, y: 90, w: 45, h: 18 },
+          { x: 680, y: 50, w: 50, h: 18 },
+          { x: 780, y: 40, w: 70, h: 20 },
+        ],
+        goal: { x: 780, y: 40, w: 70, h: 20 },
+        spawn: { x: 40, y: 340 },
+      },
+      // 5
+      {
+        platforms: [
+          { x: 0, y: 430, w: 110, h: 30 },
+          { x: 150, y: 380, w: 50, h: 18 },
+          { x: 250, y: 320, w: 45, h: 18 },
+          { x: 340, y: 260, w: 45, h: 18 },
+          { x: 440, y: 200, w: 50, h: 18 },
+          { x: 550, y: 150, w: 50, h: 18 },
+          { x: 660, y: 220, w: 55, h: 18 },
+          { x: 760, y: 140, w: 55, h: 18 },
+          { x: 850, y: 90, w: 50, h: 20 },
+        ],
+        goal: { x: 850, y: 90, w: 50, h: 20 },
+        spawn: { x: 40, y: 340 },
+      },
+      // 6
+      {
+        platforms: [
+          { x: 0, y: 380, w: 110, h: 25 },
+          { x: 150, y: 440, w: 65, h: 18 },
+          { x: 260, y: 480, w: 60, h: 18 },
+          { x: 360, y: 410, w: 50, h: 18 },
+          { x: 450, y: 340, w: 50, h: 18 },
+          { x: 540, y: 270, w: 50, h: 18 },
+          { x: 630, y: 200, w: 50, h: 18 },
+          { x: 720, y: 140, w: 45, h: 16 },
+          { x: 810, y: 90, w: 60, h: 20 },
+        ],
+        goal: { x: 810, y: 90, w: 60, h: 20 },
+        spawn: { x: 45, y: 300 },
+      },
+      // 7
+      {
+        platforms: [
+          { x: 0, y: 430, w: 90, h: 30 },
+          { x: 120, y: 400, w: 40, h: 16 },
+          { x: 200, y: 350, w: 40, h: 16 },
+          { x: 280, y: 300, w: 40, h: 16 },
+          { x: 360, y: 250, w: 40, h: 16 },
+          { x: 440, y: 200, w: 40, h: 16 },
+          { x: 520, y: 150, w: 40, h: 16 },
+          { x: 600, y: 100, w: 40, h: 16 },
+          { x: 680, y: 60, w: 45, h: 16 },
+          { x: 780, y: 40, w: 70, h: 20 },
+        ],
+        goal: { x: 780, y: 40, w: 70, h: 20 },
+        spawn: { x: 35, y: 340 },
+      },
+      // 8
+      {
+        platforms: [
+          { x: 0, y: 400, w: 100, h: 25 },
+          { x: 150, y: 350, w: 55, h: 18 },
+          { x: 250, y: 420, w: 55, h: 18 },
+          { x: 360, y: 340, w: 55, h: 18 },
+          { x: 470, y: 260, w: 55, h: 18 },
+          { x: 580, y: 340, w: 55, h: 18 },
+          { x: 690, y: 240, w: 55, h: 18 },
+          { x: 800, y: 160, w: 60, h: 20 },
+        ],
+        goal: { x: 800, y: 160, w: 60, h: 20 },
+        spawn: { x: 45, y: 310 },
+      },
+      // 9
+      {
+        platforms: [
+          { x: 0, y: 450, w: 80, h: 30 },
+          { x: 110, y: 410, w: 50, h: 16 },
+          { x: 190, y: 360, w: 50, h: 16 },
+          { x: 270, y: 310, w: 50, h: 16 },
+          { x: 350, y: 260, w: 50, h: 16 },
+          { x: 430, y: 210, w: 50, h: 16 },
+          { x: 510, y: 160, w: 50, h: 16 },
+          { x: 590, y: 110, w: 50, h: 16 },
+          { x: 670, y: 60, w: 50, h: 16 },
+          { x: 770, y: 30, w: 70, h: 20 },
+        ],
+        goal: { x: 770, y: 30, w: 70, h: 20 },
+        spawn: { x: 30, y: 360 },
+      },
+      // 10
+      {
+        platforms: [
+          { x: 0, y: 430, w: 100, h: 25 },
+          { x: 140, y: 380, w: 60, h: 18 },
+          { x: 240, y: 310, w: 55, h: 18 },
+          { x: 340, y: 250, w: 55, h: 18 },
+          { x: 440, y: 190, w: 55, h: 18 },
+          { x: 540, y: 130, w: 55, h: 18 },
+          { x: 640, y: 80, w: 55, h: 18 },
+          { x: 740, y: 50, w: 60, h: 20 },
+          { x: 840, y: 30, w: 55, h: 20 },
+        ],
+        goal: { x: 840, y: 30, w: 55, h: 20 },
+        spawn: { x: 40, y: 340 },
+      },
+      // 11 – fake platforms (5 sec delay)
+      {
+        platforms: [
+          { x: 0, y: 430, w: 100, h: 28 },
+          { x: 150, y: 380, w: 70, h: 18, fake: true },
+          { x: 260, y: 340, w: 70, h: 18, fake: true },
+          { x: 370, y: 300, w: 70, h: 18 },
+          { x: 490, y: 250, w: 60, h: 18, fake: true },
+          { x: 590, y: 200, w: 60, h: 18 },
+          { x: 700, y: 150, w: 60, h: 18, fake: true },
+          { x: 800, y: 110, w: 70, h: 20 },
+        ],
+        goal: { x: 800, y: 110, w: 70, h: 20 },
+        spawn: { x: 40, y: 340 },
+      },
+      // 12 – moving
+      {
+        platforms: [
+          { x: 0, y: 430, w: 100, h: 28 },
+          { x: 160, y: 380, w: 55, h: 18, moveX: 60, speed: 0.02 },
+          { x: 300, y: 330, w: 55, h: 18, moveY: 40, speed: 0.03 },
+          { x: 430, y: 280, w: 55, h: 18, moveX: 80, speed: 0.025 },
+          { x: 560, y: 230, w: 55, h: 18, moveY: 50, speed: 0.035 },
+          { x: 690, y: 180, w: 55, h: 18, moveX: 60, speed: 0.02 },
+          { x: 810, y: 130, w: 60, h: 20 },
+        ],
+        goal: { x: 810, y: 130, w: 60, h: 20 },
+        spawn: { x: 40, y: 340 },
+      },
+      // 13 – invisible
+      {
+        platforms: [
+          { x: 0, y: 430, w: 100, h: 28 },
+          { x: 160, y: 390, w: 55, h: 18, invisible: true },
+          { x: 280, y: 340, w: 55, h: 18, invisible: true },
+          { x: 400, y: 290, w: 55, h: 18 },
+          { x: 520, y: 240, w: 55, h: 18, invisible: true },
+          { x: 640, y: 190, w: 55, h: 18 },
+          { x: 760, y: 140, w: 55, h: 18, invisible: true },
+          { x: 840, y: 90, w: 60, h: 20 },
+        ],
+        goal: { x: 840, y: 90, w: 60, h: 20 },
+        spawn: { x: 40, y: 340 },
+      },
+      // 14 – flipped gravity
+      {
+        platforms: [
+          { x: 0, y: 40, w: 100, h: 28 },
+          { x: 160, y: 80, w: 55, h: 18 },
+          { x: 290, y: 120, w: 55, h: 18 },
+          { x: 420, y: 160, w: 55, h: 18 },
+          { x: 550, y: 200, w: 55, h: 18 },
+          { x: 680, y: 240, w: 55, h: 18 },
+          { x: 800, y: 290, w: 60, h: 20 },
+        ],
+        goal: { x: 800, y: 290, w: 60, h: 20 },
+        spawn: { x: 40, y: 80 },
+        gravityFlip: true,
+      },
+      // 15 – runaway goal (now comes back!)
+      {
+        platforms: [
+          { x: 0, y: 430, w: 100, h: 28 },
+          { x: 160, y: 390, w: 55, h: 18 },
+          { x: 290, y: 340, w: 55, h: 18 },
+          { x: 420, y: 290, w: 55, h: 18 },
+          { x: 550, y: 240, w: 55, h: 18 },
+          { x: 680, y: 190, w: 55, h: 18 },
+          { x: 800, y: 140, w: 60, h: 20 },
+        ],
+        goal: { x: 800, y: 140, w: 60, h: 20 },
+        spawn: { x: 40, y: 340 },
+        runawayGoal: true,
+      },
+      // 16 – fakes + invisible
+      {
+        platforms: [
+          { x: 0, y: 430, w: 100, h: 28 },
+          { x: 150, y: 390, w: 55, h: 16, fake: true },
+          { x: 260, y: 340, w: 55, h: 16, invisible: true },
+          { x: 380, y: 290, w: 55, h: 16 },
+          { x: 500, y: 240, w: 55, h: 16, fake: true },
+          { x: 620, y: 190, w: 55, h: 16, invisible: true },
+          { x: 740, y: 140, w: 55, h: 16, fake: true },
+          { x: 830, y: 90, w: 60, h: 20 },
+        ],
+        goal: { x: 830, y: 90, w: 60, h: 20 },
+        spawn: { x: 40, y: 340 },
+      },
+      // 17 – moving + fakes
+      {
+        platforms: [
+          { x: 0, y: 430, w: 100, h: 28 },
+          { x: 160, y: 390, w: 55, h: 16, moveX: 70, speed: 0.025, fake: true },
+          { x: 300, y: 340, w: 55, h: 16, moveY: 40, speed: 0.03 },
+          { x: 440, y: 290, w: 55, h: 16, moveX: 80, speed: 0.02, fake: true },
+          { x: 580, y: 240, w: 55, h: 16, moveY: 50, speed: 0.035 },
+          { x: 720, y: 190, w: 55, h: 16, moveX: 60, speed: 0.025, fake: true },
+          { x: 830, y: 140, w: 60, h: 20 },
+        ],
+        goal: { x: 830, y: 140, w: 60, h: 20 },
+        spawn: { x: 40, y: 340 },
+      },
+      // 18
+      {
+        platforms: [
+          { x: 0, y: 430, w: 90, h: 26 },
+          { x: 130, y: 400, w: 40, h: 14, fake: true },
+          { x: 220, y: 350, w: 40, h: 14, invisible: true },
+          { x: 310, y: 300, w: 40, h: 14, moveX: 40, speed: 0.03 },
+          { x: 400, y: 250, w: 40, h: 14, fake: true },
+          { x: 490, y: 200, w: 40, h: 14, invisible: true },
+          { x: 580, y: 150, w: 40, h: 14, moveY: 30, speed: 0.04 },
+          { x: 670, y: 100, w: 40, h: 14, fake: true },
+          { x: 760, y: 60, w: 45, h: 14 },
+          { x: 840, y: 40, w: 55, h: 20 },
+        ],
+        goal: { x: 840, y: 40, w: 55, h: 20 },
+        spawn: { x: 30, y: 340 },
+      },
+      // 19
+      {
+        platforms: [
+          { x: 0, y: 430, w: 85, h: 24 },
+          { x: 130, y: 400, w: 45, h: 14, fake: true },
+          { x: 220, y: 350, w: 45, h: 14, invisible: true },
+          { x: 310, y: 300, w: 45, h: 14, moveX: 50, speed: 0.03 },
+          { x: 400, y: 250, w: 45, h: 14, fake: true, invisible: true },
+          { x: 490, y: 200, w: 45, h: 14, moveY: 35, speed: 0.035 },
+          { x: 580, y: 150, w: 45, h: 14, fake: true },
+          { x: 670, y: 100, w: 45, h: 14, invisible: true, moveX: 40, speed: 0.025 },
+          { x: 760, y: 60, w: 45, h: 14 },
+          { x: 840, y: 30, w: 55, h: 20 },
+        ],
+        goal: { x: 840, y: 30, w: 55, h: 20 },
+        spawn: { x: 30, y: 340 },
+        runawayGoal: true,
+      },
+      // 20
+      {
+        platforms: [
+          { x: 0, y: 40, w: 85, h: 24 },
+          { x: 130, y: 70, w: 45, h: 14, fake: true },
+          { x: 220, y: 110, w: 45, h: 14, invisible: true },
+          { x: 310, y: 150, w: 45, h: 14, moveX: 50, speed: 0.03 },
+          { x: 400, y: 190, w: 45, h: 14, fake: true, invisible: true },
+          { x: 490, y: 230, w: 45, h: 14, moveY: 35, speed: 0.035 },
+          { x: 580, y: 270, w: 45, h: 14, fake: true },
+          { x: 670, y: 310, w: 45, h: 14, invisible: true, moveX: 40, speed: 0.025 },
+          { x: 760, y: 350, w: 45, h: 14 },
+          { x: 840, y: 390, w: 55, h: 20 },
+        ],
+        goal: { x: 840, y: 390, w: 55, h: 20 },
+        spawn: { x: 30, y: 80 },
+        gravityFlip: true,
+        runawayGoal: true,
+      },
+    ];
+
+    let currentPlatforms = [];
+    let currentGoal = { x: 0, y: 0, w: 0, h: 0 };
+    let currentSpawn = { x: 80, y: 350 };
+    let currentGravity = GRAVITY;
+
+    // ---------- INPUT ----------
+    const keys = { left: false, right: false, up: false };
+
+    function handleKeyDown(e) {
+      const key = e.key;
+      if (key === 'ArrowLeft' || key === 'Left' || key === 'a' || key === 'A') {
+        keys.left = true; e.preventDefault();
+      } else if (key === 'ArrowRight' || key === 'Right' || key === 'd' || key === 'D') {
+        keys.right = true; e.preventDefault();
+      } else if (key === 'ArrowUp' || key === 'Up' || key === 'w' || key === 'W' || key === ' ') {
+        if (!keys.up) attemptJump();
+        keys.up = true; e.preventDefault();
+      }
+    }
+
+    function handleKeyUp(e) {
+      const key = e.key;
+      if (key === 'ArrowLeft' || key === 'Left' || key === 'a' || key === 'A') {
+        keys.left = false; e.preventDefault();
+      } else if (key === 'ArrowRight' || key === 'Right' || key === 'd' || key === 'D') {
+        keys.right = false; e.preventDefault();
+      } else if (key === 'ArrowUp' || key === 'Up' || key === 'w' || key === 'W' || key === ' ') {
+        keys.up = false; e.preventDefault();
+      }
+    }
+
+    // ---------- DOUBLE JUMP ----------
+    function attemptJump() {
+      if (player.jumpsLeft > 0) {
+        const isGroundJump = player.onGround;
+        const force = isGroundJump ? JUMP_FORCE : DOUBLE_JUMP_FORCE;
+        const jumpDir = currentGravity > 0 ? force : -force;
+        player.vy = jumpDir;
+        player.onGround = false;
+        player.jumpsLeft--;
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    // ---------- LOAD LEVEL ----------
+    function loadLevel(index) {
+      const level = levels[index];
+      currentPlatforms = level.platforms.map(p => ({
+        ...p,
+        origX: p.x,
+        origY: p.y,
+        currentX: p.x,
+        currentY: p.y,
+        fade: 1,
+        fadeState: 'idle',
+        fadeProgress: 0,
+        fakeTimer: 0,
+        fakeTriggered: false,
+      }));
+      currentGoal = { ...level.goal };
+      currentSpawn = { ...level.spawn };
+      currentGravity = level.gravityFlip ? -GRAVITY : GRAVITY;
+
+      fakePlatforms = [];
+      triggeredFakes = new Set();
+      movingPlatforms = [];
+      invisiblePlatforms = [];
+      ghostGoal = !!level.runawayGoal;
+      goalOffsetX = 0;
+      goalOffsetY = 0;
+      goalOriginal = { x: currentGoal.x, y: currentGoal.y };
+      respawnCooldown = 0;
+
+      currentPlatforms.forEach((p, i) => {
+        if (p.fake) fakePlatforms.push(i);
+        if (p.moveX || p.moveY) movingPlatforms.push(i);
+        if (p.invisible) invisiblePlatforms.push(i);
+      });
+
+      player.x = currentSpawn.x;
+      player.y = currentSpawn.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = false;
+      player.jumpsLeft = 2;
+      frameCounter = 0;
+
+      levelDisplay.textContent = `${index + 1} / ${levels.length}`;
+      messageEl.textContent = '⬆️ jump ⬅️➡️';
+      messageEl.classList.remove('win-message');
+      messageEl.style.color = '#e2e8f0';
+    }
+
+    // ---------- RESPAWN ----------
+    function respawnPlayer() {
+      if (respawnCooldown > 0) return;
+      respawnCooldown = 60;
+
+      player.x = currentSpawn.x;
+      player.y = currentSpawn.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = false;
+      player.jumpsLeft = 2;
+
+      // Reset goal position too
+      goalOffsetX = 0;
+      goalOffsetY = 0;
+      currentGoal.x = goalOriginal.x;
+      currentGoal.y = goalOriginal.y;
+
+      currentPlatforms.forEach(p => {
+        if (p.fake) {
+          p.fadeState = 'refilling';
+          p.fade = 0;
+          p.fadeProgress = 0;
+          p.fakeTimer = 0;
+          p.fakeTriggered = false;
+        }
+      });
+      triggeredFakes.clear();
+
+      messageEl.textContent = '💥 try again';
+      setTimeout(() => {
+        if (messageEl.textContent === '💥 try again') {
+          messageEl.textContent = '⬆️ jump ⬅️➡️';
+        }
+      }, 700);
+    }
+
+    // ---------- NEXT LEVEL ----------
+    function goToNextLevel() {
+      if (goalCooldown) return;
+      goalCooldown = true;
+
+      if (currentLevelIndex + 1 < levels.length) {
+        currentLevelIndex++;
+        loadLevel(currentLevelIndex);
+        messageEl.textContent = '🚀 NEXT LEVEL!';
+        messageEl.classList.add('win-message');
+        setTimeout(() => {
+          if (messageEl.textContent === '🚀 NEXT LEVEL!') {
+            messageEl.textContent = '⬆️ jump ⬅️➡️';
+            messageEl.classList.remove('win-message');
+          }
+        }, 900);
+      } else {
+        currentLevelIndex = 0;
+        loadLevel(0);
+        messageEl.textContent = '🎉 ALL 20 LEVELS COMPLETE! 🎉';
+        messageEl.classList.add('win-message');
+        setTimeout(() => {
+          messageEl.textContent = '⬆️ jump ⬅️➡️';
+          messageEl.classList.remove('win-message');
+        }, 3000);
+      }
+      setTimeout(() => { goalCooldown = false; }, 300);
+    }
+
+    function resetGame() {
+      currentLevelIndex = 0;
+      goalCooldown = false;
+      loadLevel(0);
+    }
+
+    document.getElementById('resetBtn').addEventListener('click', resetGame);
+
+    // ---------- HELPERS ----------
+    function isPlatformVisible(p, idx) {
+      if (p.invisible) {
+        const dx = Math.abs((player.x + player.width / 2) - (p.currentX + p.w / 2));
+        const dy = Math.abs((player.y + player.height / 2) - (p.currentY + p.h / 2));
+        return dx < 130 && dy < 130;
+      }
+      return true;
+    }
+
+    function isPlatformSolid(idx) {
+      if (triggeredFakes.has('fake_' + idx)) return false;
+      return true;
+    }
+
+    // ---------- PHYSICS ----------
+    function applyPhysics() {
+      frameCounter++;
+      if (respawnCooldown > 0) respawnCooldown--;
+
+      // Update moving platforms
+      currentPlatforms.forEach((p) => {
+        if (p.moveX) {
+          p.currentX = p.origX + Math.sin(frameCounter * (p.speed || 0.02)) * p.moveX;
+          p.x = p.currentX;
+        }
+        if (p.moveY) {
+          p.currentY = p.origY + Math.sin(frameCounter * (p.speed || 0.02)) * p.moveY;
+          p.y = p.currentY;
+        }
+      });
+
+      // Tick fake platform timers
+      currentPlatforms.forEach((p, i) => {
+        if (p.fake && p.fakeTriggered && !triggeredFakes.has('fake_' + i)) {
+          p.fakeTimer--;
+          if (p.fakeTimer <= 0) {
+            triggeredFakes.add('fake_' + i);
+            p.fadeState = 'idle';
+            p.fade = 1;
+          }
+        }
+      });
+
+      // Fade-in animation
+      currentPlatforms.forEach((p) => {
+        if (p.fadeState === 'refilling') {
+          p.fadeProgress += 0.015;
+          if (p.fadeProgress >= 1) {
+            p.fadeProgress = 1;
+            p.fade = 1;
+            p.fadeState = 'idle';
+          } else {
+            p.fade = p.fadeProgress;
+          }
+        }
+      });
+
+      // ---------- RUNAWAY GOAL (returns home!) ----------
+      if (ghostGoal) {
+        const dx = player.x - currentGoal.x;
+        const dy = player.y - currentGoal.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 180 && dist > 0.1) {
+          // Player is close → run away
+          goalOffsetX -= (dx / dist) * 1.2;
+          goalOffsetY -= (dy / dist) * 1.2;
+        } else {
+          // Player is far → drift back toward original position
+          goalOffsetX *= 0.95;
+          goalOffsetY *= 0.95;
+          if (Math.abs(goalOffsetX) < 0.5) goalOffsetX = 0;
+          if (Math.abs(goalOffsetY) < 0.5) goalOffsetY = 0;
+        }
+
+        goalOffsetX = Math.max(-250, Math.min(250, goalOffsetX));
+        goalOffsetY = Math.max(-200, Math.min(200, goalOffsetY));
+        currentGoal.x = goalOriginal.x + goalOffsetX;
+        currentGoal.y = goalOriginal.y + goalOffsetY;
+      }
+
+      // Horizontal
+      if (keys.left) player.vx = -MOVE_SPEED;
+      else if (keys.right) player.vx = MOVE_SPEED;
+      else player.vx = 0;
+
+      // Gravity
+      player.vy += currentGravity;
+      const maxV = 18;
+      if (player.vy > maxV) player.vy = maxV;
+      if (player.vy < -maxV) player.vy = -maxV;
+
+      const prevX = player.x;
+      const prevY = player.y;
+
+      // Move X
+      player.x += player.vx;
+      if (player.x < 0) { player.x = 0; player.vx = 0; }
+      if (player.x + player.width > W) { player.x = W - player.width; player.vx = 0; }
+
+      // Move Y
+      player.y += player.vy;
+      const wasOnGround = player.onGround;
+      player.onGround = false;
+
+      // Collision
+      for (let i = 0; i < currentPlatforms.length; i++) {
+        const pl = currentPlatforms[i];
+        if (!isPlatformSolid(i)) continue;
+        if (pl.invisible && !isPlatformVisible(pl, i)) continue;
+
+        const overlapX = player.x < pl.x + pl.w && player.x + player.width > pl.x;
+        const overlapY = player.y < pl.y + pl.h && player.y + player.height > pl.y;
+
+        if (overlapX && overlapY) {
+          if (pl.fake && !pl.fakeTriggered) {
+            pl.fakeTriggered = true;
+            pl.fakeTimer = FAKE_DELAY_FRAMES;
+            messageEl.textContent = '⏳ 5s...';
+            setTimeout(() => {
+              if (messageEl.textContent === '⏳ 5s...') {
+                messageEl.textContent = '⬆️ jump ⬅️➡️';
+              }
+            }, 1200);
+          }
+
+          const prevOverlapX = prevX < pl.x + pl.w && prevX + player.width > pl.x;
+          const prevOverlapY = prevY < pl.y + pl.h && prevY + player.height > pl.y;
+
+          if (!prevOverlapY) {
+            if (currentGravity > 0) {
+              if (prevY + player.height <= pl.y && player.vy >= 0) {
+                player.y = pl.y - player.height;
+                player.vy = 0;
+                player.onGround = true;
+              } else if (prevY >= pl.y + pl.h && player.vy < 0) {
+                player.y = pl.y + pl.h;
+                player.vy = 0;
+              }
+            } else {
+              if (prevY >= pl.y + pl.h && player.vy <= 0) {
+                player.y = pl.y + pl.h;
+                player.vy = 0;
+                player.onGround = true;
+              } else if (prevY + player.height <= pl.y && player.vy > 0) {
+                player.y = pl.y - player.height;
+                player.vy = 0;
+              }
+            }
+          } else if (!prevOverlapX) {
+            if (prevX + player.width <= pl.x) player.x = pl.x - player.width;
+            else if (prevX >= pl.x + pl.w) player.x = pl.x + pl.w;
+            player.vx = 0;
+          } else {
+            if (currentGravity > 0) {
+              if (player.vy > 0) {
+                player.y = pl.y - player.height;
+                player.vy = 0;
+                player.onGround = true;
+              } else if (player.vy < 0) {
+                player.y = pl.y + pl.h;
+                player.vy = 0;
+              }
+            } else {
+              if (player.vy < 0) {
+                player.y = pl.y + pl.h;
+                player.vy = 0;
+                player.onGround = true;
+              } else if (player.vy > 0) {
+                player.y = pl.y - player.height;
+                player.vy = 0;
+              }
+            }
+          }
+        }
+      }
+
+      // Reset double jump on landing
+      if (player.onGround && !wasOnGround) {
+        player.jumpsLeft = 2;
+      }
+      if (player.onGround) {
+        player.jumpsLeft = 2;
+      }
+
+      // Fall out
+      if (currentGravity > 0 && player.y + player.height > H) {
+        respawnPlayer();
+      } else if (currentGravity < 0 && player.y < -50) {
+        respawnPlayer();
+      }
+
+      // Goal
+      const playerBottom = player.y + player.height;
+      const playerRight = player.x + player.width;
+      const horizontallyOver = playerRight > currentGoal.x && player.x < currentGoal.x + currentGoal.w;
+      const verticallyOnGoal = playerBottom >= currentGoal.y && player.y <= currentGoal.y + currentGoal.h;
+
+      if (horizontallyOver && verticallyOnGoal) {
+        goToNextLevel();
+      }
+    }
+
+    // ---------- DRAWING ----------
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+
+      const hue = (currentLevelIndex * 18) % 360;
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, `hsl(${210 + hue}, 40%, 10%)`);
+      grad.addColorStop(0.7, `hsl(${210 + hue}, 30%, 18%)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.fillStyle = '#ffffff30';
+      for (let i = 0; i < 60; i++) {
+        const sx = (i * 131 + currentLevelIndex * 13) % W;
+        const sy = (i * 279) % (H * 0.6);
+        ctx.beginPath();
+        ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Platforms
+      for (let i = 0; i < currentPlatforms.length; i++) {
+        const pl = currentPlatforms[i];
+
+        if (pl.fake && triggeredFakes.has('fake_' + i)) {
+          if (pl.fadeState === 'refilling') {
+            ctx.globalAlpha = pl.fade;
+          } else {
+            continue;
+          }
+        } else if (pl.invisible && !isPlatformVisible(pl, i)) {
+          continue;
+        }
+
+        let baseColor = '#2e3f4f';
+        let topColor = '#5f7e9c';
+        let botColor = '#1e2b38';
+
+        if (pl.fake && pl.fakeTriggered) {
+          const t = pl.fakeTimer / FAKE_DELAY_FRAMES;
+          const warning = 1 - t;
+          if (warning > 0.4) {
+            const r = Math.floor(46 + warning * 150);
+            const g = Math.floor(63 - warning * 40);
+            const b = Math.floor(79 - warning * 40);
+            baseColor = `rgb(${r}, ${g}, ${b})`;
+            topColor = `rgb(${Math.floor(95 + warning * 100)}, ${Math.floor(126 - warning * 80)}, ${Math.floor(156 - warning * 80)})`;
+          }
+        }
+
+        ctx.fillStyle = baseColor;
+        ctx.shadowColor = '#00000050';
+        ctx.shadowBlur = 12;
+        ctx.shadowOffsetY = 4;
+        ctx.beginPath();
+        ctx.roundRect(pl.x, pl.y, pl.w, pl.h, 8);
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+        ctx.fillStyle = topColor;
+        ctx.beginPath();
+        ctx.roundRect(pl.x, pl.y, pl.w, 4, 6);
+        ctx.fill();
+
+        ctx.fillStyle = botColor;
+        ctx.beginPath();
+        ctx.roundRect(pl.x, pl.y + pl.h - 4, pl.w, 4, 6);
+        ctx.fill();
+
+        if (pl.fake && pl.fakeTriggered && !triggeredFakes.has('fake_' + i)) {
+          const secondsLeft = Math.ceil(pl.fakeTimer / 60);
+          ctx.font = 'bold 14px "Segoe UI", sans-serif';
+          ctx.fillStyle = '#fef08a';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(secondsLeft + 's', pl.x + pl.w / 2, pl.y - 12);
+        }
+
+        ctx.globalAlpha = 1;
+      }
+
+      // Goal (with a subtle "home" marker)
+      if (ghostGoal) {
+        // Draw the "home" position as a faint outline
+        ctx.strokeStyle = '#eab30830';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(goalOriginal.x, goalOriginal.y, currentGoal.w, currentGoal.h);
+        ctx.setLineDash([]);
+      }
+
+      ctx.shadowBlur = 25;
+      ctx.shadowColor = '#eab308';
+      ctx.fillStyle = '#facc15';
+      ctx.beginPath();
+      ctx.roundRect(currentGoal.x, currentGoal.y, currentGoal.w, currentGoal.h, 8);
+      ctx.fill();
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = '#fef9c3';
+      ctx.beginPath();
+      ctx.arc(currentGoal.x + currentGoal.w / 2, currentGoal.y - 8, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#b45309';
+      ctx.font = 'bold 20px "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('★', currentGoal.x + currentGoal.w / 2, currentGoal.y - 8);
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+
+      // Player
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = player.jumpsLeft > 1 ? '#38bdf8' : '#3b82f6';
+      ctx.fillStyle = '#3b82f6';
+      ctx.beginPath();
+      ctx.roundRect(player.x, player.y, player.width, player.height, 10);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath(); ctx.arc(player.x + 9, player.y + 11, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(player.x + 21, player.y + 11, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(player.x + 7, player.y + 9, 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(player.x + 19, player.y + 9, 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath();
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 2.5;
+      ctx.arc(player.x + 15, player.y + 19, 6, 0.1, Math.PI - 0.1);
+      ctx.stroke();
+
+      // Double jump indicator
+      const dotY = currentGravity > 0 ? player.y - 12 : player.y + player.height + 12;
+      for (let d = 0; d < 2; d++) {
+        ctx.fillStyle = d < player.jumpsLeft ? '#38bdf8' : '#1e293b';
+        ctx.shadowBlur = d < player.jumpsLeft ? 8 : 0;
+        ctx.shadowColor = '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(player.x + 10 + d * 11, dotY, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      // HUD
+      ctx.font = 'bold 14px "Segoe UI", monospace';
+      ctx.fillStyle = '#94a3b8';
+      ctx.textAlign = 'right';
+      ctx.fillText(`LEVEL ${currentLevelIndex + 1}/${levels.length}`, W - 20, 40);
+
+      // Progress bar
+      const barW = 200;
+      const barX = W - barW - 20;
+      const barY = 55;
+      ctx.fillStyle = '#0b1120';
+      ctx.fillRect(barX, barY, barW, 6);
+      ctx.fillStyle = '#facc15';
+      ctx.fillRect(barX, barY, barW * (currentLevelIndex / (levels.length - 1)), 6);
+
+      // Goal hint
+      ctx.fillStyle = '#facc1550';
+      ctx.font = 'bold 18px "Segoe UI"';
+      ctx.textAlign = 'center';
+      ctx.fillText('→ goal →', currentGoal.x + currentGoal.w / 2, currentGoal.y - 40);
+    }
+
+    CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+      if (w < 2 * r) r = w / 2;
+      if (h < 2 * r) r = h / 2;
+      this.moveTo(x + r, y);
+      this.lineTo(x + w - r, y);
+      this.quadraticCurveTo(x + w, y, x + w, y + r);
+      this.lineTo(x + w, y + h - r);
+      this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      this.lineTo(x + r, y + h);
+      this.quadraticCurveTo(x, y + h, x, y + h - r);
+      this.lineTo(x, y + r);
+      this.quadraticCurveTo(x, y, x + r, y);
+      return this;
+    };
+
+    // ---------- LOOP ----------
+    function gameLoop() {
+      applyPhysics();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    resetGame();
+    gameLoop();
+
+    window.addEventListener('blur', () => {
+      keys.left = false; keys.right = false; keys.up = false;
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Space'].includes(e.key)) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+  })();
+</script>
+</body>
+</html>
